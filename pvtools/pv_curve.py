@@ -66,7 +66,7 @@ class PVCurve:
         # turgor loss point
         slope, intercept = np.polyfit(self.sol_pot[:self.bkp], self.turgor_pressure[:self.bkp], 1)
         self.tlp_slope = slope
-        self.tlp = -intercept / self.tlp_slope
+        self.tlp = intercept / self.tlp_slope
 
         # rwc at turgor loss point
         slope, intercept = np.polyfit(self.rwc[:self.bkp], self.turgor_pressure[:self.bkp], 1)
@@ -243,7 +243,6 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
     
     # find the breakpoint that maximizes R2
     breakpoint = np.argmax(r2s) + 2
-    print(possible_bkps, r2s, tlps)
 
 
     if plot:
@@ -257,15 +256,15 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
         ax[0].scatter(bad_breakpoints, bad_r2s, color='black', marker='o', zorder=1) 
         ax[0].scatter(breakpoint, r2s[breakpoint-2], marker='*', color='red', zorder=1, s=100)
         ax[0].set_title('R² vs. Breakpoint')
-        ax[0].set_xlabel('Breakpoint')
+        ax[0].set_xlabel('Breakpoint (# of points used for pre-TLP)')
         ax[0].set_ylabel('R²')
 
         ax[1].plot(possible_bkps, tlps, color='black', zorder=0, linewidth=0.5)
         ax[1].scatter(bad_breakpoints, bad_tlps, color='black', marker='o', zorder=1)
         ax[1].scatter(breakpoint, tlps[breakpoint-2], marker='*', color='red', zorder=1, s=100)
-        ax[1].set_title('TLP vs. Breakpoint')
-        ax[1].set_xlabel('Breakpoint')
-        ax[1].set_ylabel('TLP')
+        ax[1].set_title('Turgor Loss Point Estimate')
+        ax[1].set_xlabel('Breakpoint (# of points used for pre-TLP)')
+        ax[1].set_ylabel('Turgor Loss Point (MPa)')
 
         plt.tight_layout()
         plt.show()
