@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
 import os
+import statsmodels.api as sm
+
 import matplotlib.pyplot as plt
+
+import logging
+logging.basicConfig(level=logging.INFO)
 
 
 # object class called a pv curve
@@ -33,6 +38,15 @@ class PVCurve:
         self.leaf_area = leaf_area
         self.height = height
         self.bkp = bkp
+
+        # sort everything according to the mass
+        sort_idx = np.argsort(masses)
+        self.psis = psis[sort_idx]
+        self.masses = masses[sort_idx]
+        
+        # if the sorting changed something, let the user know
+        if not np.array_equal(sort_idx, np.arange(len(masses))):
+            logging.warning("Data was sorted into increasing mass order.")
 
         # basic calculations
         self.inverse_psis = -1 / psis
@@ -102,6 +116,16 @@ class PVCurve:
         self.r2_aftertlp = np.corrcoef(self.inverse_psis[self.bkp:], self.rwc[self.bkp:])[0,1]**2
         self.r2 = (self.r2_beforetlp * self.bkp + self.r2_aftertlp * (len(self.psis)-self.bkp)) / len(self.psis)
     
+    # remove point from curve based on index
+    def remove_point(self, idx: int):
+        """
+        Remove a point from the PVCurve object based on index.
+        """
+        new_psis = np.delete(self.psis, idx)
+        new_masses = np.delete(self.masses, idx)
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, 0) # breakpoint will be recalculated
+        return new_pvcurve
+
     # print function
     def __repr__(self):
         return "TLP: {:.3f} MPa \nR2: {:.3f}".format(self.tlp, self.r2)   
@@ -269,6 +293,7 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
         plt.tight_layout()
         plt.show()
 
+    logging.info(f"Breakpoint found at index {breakpoint} with R² of {r2s[breakpoint-2]:.3f}")
 
     if return_r2s:
         return breakpoint, r2s
