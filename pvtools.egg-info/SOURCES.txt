@@ -7,3 +7,4 @@ pvtools.egg-info/PKG-INFO
 pvtools.egg-info/SOURCES.txt
 pvtools.egg-info/dependency_links.txt
 pvtools.egg-info/top_level.txt
+tests/test_data.py

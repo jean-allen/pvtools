@@ -39,14 +39,14 @@ class PVCurve:
         self.height = height
         self.bkp = bkp
 
-        # sort everything according to the mass
-        sort_idx = np.argsort(masses)
+        # sort everything according to the mass in reverse order
+        sort_idx = np.argsort(masses)[::-1]
         self.psis = psis[sort_idx]
         self.masses = masses[sort_idx]
         
         # if the sorting changed something, let the user know
         if not np.array_equal(sort_idx, np.arange(len(masses))):
-            logging.warning("Data was sorted into increasing mass order.")
+            logging.warning("Data was sorted into decreasing mass order.")
 
         # basic calculations
         self.inverse_psis = -1 / psis
@@ -232,10 +232,28 @@ class PVCurve:
         """
         new_PVcurve = PVCurve(self.psis, self.masses, self.dry_mass, self.leaf_area, self.height, bkp)
         return new_PVcurve
+    
+    
+    def remove_outliers(self, z_thresh: float = 3, plot=False):
+        """
+        Remove outliers from the PVCurve object based on confidence interval around linear regressions.
+        """  
+        # step one: remove outliers from before TLP (between psi and water mass)
+        reg1 = sm.OLS(self.psis[:self.bkp], self.water_mass[:self.bkp]).fit()
+        res1 = reg1.fit()
+        conf1 = res1.conf_int(alpha=0.05)  # 95% confidence interval
 
+        fig, axs = plt.subplots(1,2, figsize=(12,6))
+        axs[0].plot(self.water_mass[:self.bkp], self.psis[:self.bkp], 'o', color='black')
+        axs[0].plot(self.water_mass[:self.bkp], reg1.predict(), color='black')
+        axs[0].plot(self.water_mass[:self.bkp], conf1[:,0], '--', color='black')
+        axs[0].plot(self.water_mass[:self.bkp], conf1[:,1], '--', color='black')
+        axs[0].set_title('Before TLP')
+        axs[0].set_xlabel('Water Mass (g)')
+        axs[0].set_ylabel('Ψ (MPa)')
+        axs[0].invert_xaxis()
 
-
-
+        plt.show()
 
 
 
