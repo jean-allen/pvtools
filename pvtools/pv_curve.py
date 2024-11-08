@@ -23,13 +23,7 @@ class PVCurve:
             height: height of the sample (m)
             bkp: breakpoint index (default is 0, which will be calculated -- alternatively, provide the # of points that should be included in the first segment)
         """
-        # check that the size of the water potential and mass data are the same
-        if psis.shape != masses.shape:
-            raise ValueError("Ψ and mass data are not the same shape. If there are missing measurements, please fill in with np.nan.")
-        # check that the breakpoint is within the range of the data
-        if bkp < 0 or bkp > len(psis):
-            raise ValueError("Breakpoint is either negative or larger than the number of points in the dataset.")
-
+        # TODO: #2 remodel init so that each calculation takes place in a function
 
         # input data...
         self.psis = psis
@@ -38,6 +32,9 @@ class PVCurve:
         self.leaf_area = leaf_area
         self.height = height
         self.bkp = bkp
+
+        # validate the data
+        self._validate_data()
 
         # sort everything according to the mass in reverse order
         sort_idx = np.argsort(masses)[::-1]
@@ -116,6 +113,13 @@ class PVCurve:
         self.r2_aftertlp = np.corrcoef(self.inverse_psis[self.bkp:], self.rwc[self.bkp:])[0,1]**2
         self.r2 = (self.r2_beforetlp * self.bkp + self.r2_aftertlp * (len(self.psis)-self.bkp)) / len(self.psis)
     
+    def _validate_data(self):
+        if self.psis.shape != self.masses.shape:
+            raise ValueError("Ψ and mass data are not the same shape. If there are missing measurements, please fill in with np.nan.")
+        if self.bkp < 0 or self.bkp > len(self.psis):
+            raise ValueError("Breakpoint is either negative or larger than the number of points in the dataset.")
+
+
     # remove point from curve based on index
     def remove_point(self, idx: int):
         """
