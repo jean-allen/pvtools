@@ -129,6 +129,75 @@ class PVCurve:
     # print function
     def __repr__(self):
         return "TLP: {:.3f} MPa \nR2: {:.3f}".format(self.tlp, self.r2)   
+
+    # length function (number of points in the curve)
+    def __len__(self):
+        return len(self.psis)
+
+    # indexing functions
+    def __getitem__(self, idx):
+        return (self.psis[idx], self.masses[idx])
+    def __setitem__(self, idx, value):
+        self.psis[idx], self.masses[idx] = value
+    
+    # save out to a csv file
+    def save_csv(self, filename: str):
+        """
+        Save the PVCurve object to a CSV file.
+        """
+
+        # check that the filename ends in .csv; if not throw exception
+        if not filename.endswith('.csv'):
+            raise ValueError("Filename must end in .csv")
+
+        # create a dictionary of the data
+        data = {
+            'Ψ (MPa)': self.psis,
+            'Mass (g)': self.masses,
+            '-1/Ψ (MPa^-1)': self.inverse_psis,
+            'Water mass (g)': self.water_mass,
+            'RWC': self.rwc,
+            'Solute potential (MPa)': self.sol_pot,
+            'Turgor pressure (MPa)': self.turgor_pressure
+        }
+
+        calculations = {
+            'Number of points used for \'before TLP\'': self.bkp,
+            'Dry Mass (g)': self.dry_mass,
+            'Water at FT (g)': self.water_FT,
+            'Saturated Water Content': self.swc,
+            'Osmotic potential at FT (MPa)': self.os_pot_FT,
+            'TLP (MPa)': self.tlp,
+            'Bulk elastic modulus (MPa)': self.bulk_elastic_total,
+            'RWC at TLP': self.rwc_tlp,
+            'Bulk elastic modulus (symplastic) (MPa)': self.bulk_elastic_total_sym,
+            'RWC at TLP (symplastic)': self.rwc_tlp_sym,
+            'Apoplastic Water Fraction': self.awf,
+            'Hydraulic capacitance before TLP (g MPa^-1)': self.ct_before_massnorm,
+            'Hydraulic capacitance before TLP (cm^2 MPa^-1)': self.ct_before_areanorm,
+            'Water storage capacity (g)': self.capacity_massnorm,
+            'Water storage capacity (cm^2)': self.capacity_areanorm,
+            'Water storage capacity (g) (gravity corrected)': self.capacity_massnorm_gravity,
+            'Water storage capacity (cm^2) (gravity corrected)': self.capacity_areanorm_gravity,
+            'Hydraulic capacitance after TLP (g MPa^-1)': self.ct_after_massnorm,
+            'Hydraulic capacitance after TLP (cm^2 MPa^-1)': self.ct_after_areanorm,
+            'R2 before TLP': self.r2_beforetlp,
+            'R2 after TLP': self.r2_aftertlp,
+            'R2': self.r2
+        }
+
+        # create a dataframe with the data and calculations
+        df_data = pd.DataFrame(data)
+        df_calculations = pd.DataFrame([calculations.keys(), calculations.values()]).T
+        df_calculations.columns = ['Variable Name', 'Value']
+        df = pd.concat([df_data, df_calculations], axis=1)
+        df.to_csv(filename, index=False)
+
+        absolute_path = os.path.abspath(filename)
+        logging.info(f"Data saved to {absolute_path}")
+            
+
+    
     
     # save out to an excel sheet
     def save_excel(self, filename: str):
@@ -186,7 +255,7 @@ class PVCurve:
         df.to_excel(filename, index=False)
 
         absolute_path = os.path.abspath(filename)
-        print(f"Data saved to {absolute_path}")
+        logging.info(f"Data saved to {absolute_path}")
 
     def plot(self):
         """
@@ -234,27 +303,29 @@ class PVCurve:
         return new_PVcurve
     
     
-    def remove_outliers(self, z_thresh: float = 3, plot=False):
+    def remove_outliers(self, conf: float = 0.05, plot=False):
         """
         Remove outliers from the PVCurve object based on confidence interval around linear regressions.
         """  
-        # step one: remove outliers from before TLP (between psi and water mass)
-        reg1 = sm.OLS(self.psis[:self.bkp], self.water_mass[:self.bkp]).fit()
-        res1 = reg1.fit()
-        conf1 = res1.conf_int(alpha=0.05)  # 95% confidence interval
+        # before TLP (regress water mass and psi)
+        x = self.masses[:self.bkp]
+        x = sm.add_constant(x)
+        y = self.psis[:self.bkp]
+        model = sm.OLS(y, x).fit()
+        y_hat = model.get_prediction(x).summary_frame(alpha=conf)
+        outliers1 = y[(y_hat['mean_ci_lower'] > y) | (y_hat['mean_ci_upper'] < y)]
+        outliers1_idx = [i for i, val in enumerate(y) if val in outliers1]
 
-        fig, axs = plt.subplots(1,2, figsize=(12,6))
-        axs[0].plot(self.water_mass[:self.bkp], self.psis[:self.bkp], 'o', color='black')
-        axs[0].plot(self.water_mass[:self.bkp], reg1.predict(), color='black')
-        axs[0].plot(self.water_mass[:self.bkp], conf1[:,0], '--', color='black')
-        axs[0].plot(self.water_mass[:self.bkp], conf1[:,1], '--', color='black')
-        axs[0].set_title('Before TLP')
-        axs[0].set_xlabel('Water Mass (g)')
-        axs[0].set_ylabel('Ψ (MPa)')
-        axs[0].invert_xaxis()
+        # after TLP (regress -1/psi and RWC)
+        x = self.inverse_psis[self.bkp:]
+        x = sm.add_constant(x)
+        y = self.rwc[self.bkp:]
+        model = sm.OLS(y, x).fit()
+        y_hat = model.get_prediction(x).summary_frame(alpha=conf)
+        outliers2 = y[(y_hat['mean_ci_lower'] > y) | (y_hat['mean_ci_upper'] < y)]
+        outliers2_idx = [i for i, val in enumerate(y) if val in outliers2]
 
-        plt.show()
-
+        
 
 
 
