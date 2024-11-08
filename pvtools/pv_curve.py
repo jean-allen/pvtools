@@ -307,6 +307,8 @@ class PVCurve:
         """
         Remove outliers from the PVCurve object based on confidence interval around linear regressions.
         """  
+        ## TODO: #1 add a plot option to show the outliers that were removed
+
         # before TLP (regress water mass and psi)
         x = self.masses[:self.bkp]
         x = sm.add_constant(x)
