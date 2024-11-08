@@ -119,7 +119,7 @@ class PVCurve:
     # remove point from curve based on index
     def remove_point(self, idx: int):
         """
-        Remove a point from the PVCurve object based on index.
+        Remove points from the PVCurve object based on index.
         """
         new_psis = np.delete(self.psis, idx)
         new_masses = np.delete(self.masses, idx)
@@ -325,7 +325,35 @@ class PVCurve:
         outliers2 = y[(y_hat['mean_ci_lower'] > y) | (y_hat['mean_ci_upper'] < y)]
         outliers2_idx = [i for i, val in enumerate(y) if val in outliers2]
 
-        
+        new_pvcurve = self.remove_point(outliers1_idx + outliers2_idx)
+
+        return new_pvcurve
+
+    def add_point(self, psi: float, mass: float):
+        """
+        Add a point to the PVCurve object and recalculate everything.
+        """
+        new_psis = np.append(self.psis, psi)
+        new_masses = np.append(self.masses, mass)
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, self.bkp)
+        return new_pvcurve
+    
+    def add_points(self, psis: np.ndarray, masses: np.ndarray):
+        """
+        Add multiple points to the PVCurve object and recalculate everything.
+        """
+        new_psis = np.append(self.psis, psis)
+        new_masses = np.append(self.masses, masses)
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, self.bkp)
+        return new_pvcurve
+    
+    def get_breakpoint(self, plot=False):
+        """
+        Get the breakpoint for the PVCurve object.
+        """
+        if plot:
+            get_breakpoint(self.psis, self.masses, self.dry_mass, plot=True)
+        return self.bkp
 
 
 
