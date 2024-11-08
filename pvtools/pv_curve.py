@@ -257,6 +257,8 @@ class PVCurve:
         absolute_path = os.path.abspath(filename)
         logging.info(f"Data saved to {absolute_path}")
 
+
+
     def plot(self):
         """
         Plot the pressure-volume curve.
@@ -417,3 +419,46 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
     if return_r2s:
         return breakpoint, r2s
     return breakpoint
+
+
+
+
+def read_csv(filename: str):
+    """
+    Read a CSV file into a PVCurve object.
+    """
+    # check that the filename ends in .csv; if not throw exception
+    if not filename.endswith('.csv'):
+        raise ValueError("Filename must end in .csv")
+
+    # read in the data
+    df = pd.read_csv(filename)
+
+    # check that the columns are named correctly
+    if 'Ψ (MPa)' not in df.columns or 'Mass (g)' not in df.columns or 'Dry Mass (g)' not in df.columns:
+        raise ValueError("This function was designed to read in CSVs created by the save_csv method of the PVCurve object. The supplied file is not in the expected format.")
+    
+    # create the PVCurve object
+    pvcurve = PVCurve(df['Ψ (MPa)'].values, df['Mass (g)'].values, df['Dry Mass (g)'].values[0])
+
+    return pvcurve
+
+def read_excel(filename: str):
+    """
+    Read an Excel file into a PVCurve object.
+    """
+    # check that the filename ends in .xlsx; if not throw exception
+    if not filename.endswith('.xlsx'):
+        raise ValueError("Filename must end in .xlsx")
+
+    # read in the data
+    df = pd.read_excel(filename)
+
+    # check that the columns are named correctly
+    if 'Ψ (MPa)' not in df.columns or 'Mass (g)' not in df.columns or 'Dry Mass (g)' not in df.columns:
+        raise ValueError("This function was designed to read in Excel files created by the save_excel method of the PVCurve object. The supplied file is not in the expected format.")
+    
+    # create the PVCurve object
+    pvcurve = PVCurve(df['Ψ (MPa)'].values, df['Mass (g)'].values, df['Dry Mass (g)'].values[0])
+
+    return pvcurve
