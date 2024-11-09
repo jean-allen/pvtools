@@ -5,7 +5,10 @@ setup(
     version='0.1.0',
     packages=find_packages(),
     install_requires=[
-        # List your package dependencies here
+        'numpy',
+        'pandas',
+        'statsmodels',
+        'matplotlib',
     ],
     author='Jean Allen',
     author_email='jean.allen@geog.ucsb.edu',

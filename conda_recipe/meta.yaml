@@ -1,0 +1,33 @@
+package:
+  name: pvtools
+  version: "0.1.0"
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  script: python setup.py install
+
+requirements:
+  build:
+    - python
+    - setuptools
+  run:
+    - python
+    - numpy
+    - pandas
+    - statsmodels
+    - matplotlib
+
+test:
+  imports:
+    - pvtools
+
+about:
+  home: https://github.com/jean-allen/pvtools
+  license: MIT
+  summary: "A package for analyzing pressure-volume curves."
+  description: |
+    PVCurve is a Python package for analyzing pressure-volume curves.
+  license_family: MIT
