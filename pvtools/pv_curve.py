@@ -71,7 +71,7 @@ class PVCurve:
         self.os_pot_FT = -1/self.os_pot_FT_inv
 
         # solute potential + turgor pressure split
-        self.sol_pot = -1 / (self.os_pot_FT_inv+self.os_pot_FT_slope*(1-self.rwc))
+        self.sol_pot = -1 / (self.os_pot_FT_inv+self.os_pot_FT_slope*(1-self.rwc)) # //TODO #3 for some reason the solute potentials are coming back positive?
         self.turgor_pressure = self.psis - self.sol_pot
 
         # turgor loss point
@@ -199,6 +199,23 @@ class PVCurve:
 
         absolute_path = os.path.abspath(filename)
         logging.info(f"Data saved to {absolute_path}")
+
+    def to_dataframe(self):
+        """
+        Store all the array-like data in a pandas dataframe.
+        """
+        data = {
+            'Ψ (MPa)': self.psis,
+            'Mass (g)': self.masses,
+            '-1/Ψ (MPa^-1)': self.inverse_psis,
+            'Water mass (g)': self.water_mass,
+            'RWC': self.rwc,
+            'Solute potential (MPa)': self.sol_pot,
+            'Turgor pressure (MPa)': self.turgor_pressure
+        }
+
+        df = pd.DataFrame(data)
+        return df
             
 
     
