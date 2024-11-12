@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 
 # object class called a pv curve
 class PVCurve:
-    def __init__(self, psis: np.ndarray, masses: np.ndarray, dry_mass: float, leaf_area: float = np.nan, height: float = 0, bkp: int = 0):
+    def __init__(self, psis: np.ndarray, masses: np.ndarray, dry_mass: float, leaf_area: float = np.nan, height: float = 0, bkp: int = 0, tlp_conf: float = 0.05):
         """
         PVCurve object that stores data and basic calculations for a pressure-volume curve.
         Required inputs:
@@ -22,6 +22,7 @@ class PVCurve:
             leaf_area: leaf area (cm^2)
             height: height of the sample (m)
             bkp: breakpoint index (default is 0, which will be calculated -- alternatively, provide the # of points that should be included in the first segment)
+            tlp_conf: confidence interval for the turgor loss point (default is 0.05 - aka, a 95% confidence interval)
         """
         # TODO: #2 remodel init so that each calculation takes place in a function
 
@@ -32,6 +33,7 @@ class PVCurve:
         self.leaf_area = leaf_area
         self.height = height
         self.bkp = bkp
+        self.tlp_conf = tlp_conf
 
         # validate the data
         self._validate_data()
@@ -71,13 +73,21 @@ class PVCurve:
         self.os_pot_FT = -1/self.os_pot_FT_inv
 
         # solute potential + turgor pressure split
-        self.sol_pot = -1 / (self.os_pot_FT_inv+self.os_pot_FT_slope*(1-self.rwc)) # //TODO #3 for some reason the solute potentials are coming back positive?
+        self.sol_pot = -1 / (self.os_pot_FT_inv+self.os_pot_FT_slope*(1-self.rwc))
         self.turgor_pressure = self.psis - self.sol_pot
 
-        # turgor loss point
+        # turgor loss point slope
         slope, intercept = np.polyfit(self.sol_pot[:self.bkp], self.turgor_pressure[:self.bkp], 1)
         self.tlp_slope = slope
-        self.tlp = intercept / self.tlp_slope
+
+        # turgor loss point confidence interval
+        x = self.turgor_pressure[:self.bkp]
+        x = sm.add_constant(x)
+        y = self.sol_pot[:self.bkp]
+        model = sm.OLS(y, x).fit()
+        y_hat = model.get_prediction([1,0]).summary_frame(alpha=self.tlp_conf)
+        self.tlp_conf_int = (y_hat['mean_ci_lower'], y_hat['mean_ci_upper'])
+        self.tlp = y_hat['mean'].values[0]
 
         # rwc at turgor loss point
         slope, intercept = np.polyfit(self.rwc[:self.bkp], self.turgor_pressure[:self.bkp], 1)
