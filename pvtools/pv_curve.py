@@ -175,6 +175,7 @@ class PVCurve:
             'Turgor pressure (MPa)': self.turgor_pressure
         }
 
+        # TODO #4 -- this calculations list is out of date
         calculations = {
             'Number of points used for \'before TLP\'': self.bkp,
             'Dry Mass (g)': self.dry_mass,
