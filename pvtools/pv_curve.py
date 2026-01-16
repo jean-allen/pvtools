@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import statsmodels.api as sm
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 
@@ -11,7 +12,20 @@ logging.basicConfig(level=logging.INFO)
 
 # object class called a pv curve
 class PVCurve:
-    def __init__(self, psis: np.ndarray, masses: np.ndarray, dry_mass: float, leaf_area: float = np.nan, height: float = 0, bkp: int = 0, tlp_conf: float = 0.05):
+    def __init__(
+            self,
+            psis: np.ndarray,
+            masses: np.ndarray,
+            dry_mass: float,
+            psi_unit: str = 'MPa',
+            mass_unit: str = 'g',
+            dry_mass_unit: str = 'g',
+            leaf_area: float = np.nan,
+            height: float = 0,
+            bkp: int = 0,
+            tlp_conf: float = 0.05,
+            psi_sign_convention='negative',
+            validate_data: bool = True):
         """
         PVCurve object that stores data and basic calculations for a pressure-volume curve.
         Required inputs:
@@ -19,10 +33,14 @@ class PVCurve:
             masses: numpy array of masses (g)
             dry_mass: mass of dry leaf (g)
         Optional inputs:
+            psi_unit: unit of the psi measurements (default is MPa)
+            mass_unit: unit of the wet and dry mass measurements (default is g)
             leaf_area: leaf area (cm^2)
             height: height of the sample (m)
             bkp: breakpoint index (default is 0, which will be calculated -- alternatively, provide the # of points that should be included in the first segment)
             tlp_conf: confidence interval for the turgor loss point (default is 0.05 - aka, a 95% confidence interval)
+            psi_sign_convention: 'negative' (default) or 'positive' -- indicates whether the input psis are negative values (as is standard) or positive values (e.g., pressure bomb outputs)
+            validate_data: whether to validate the input data (default is True). recommended to leave as True unless you are sure the data is clean.
         """
         # TODO: #2 remodel init so that each calculation takes place in a function
 
@@ -30,30 +48,106 @@ class PVCurve:
         self.psis = psis
         self.masses = masses
         self.dry_mass = dry_mass
+        self.psi_unit = psi_unit
+        self.mass_unit = mass_unit
+        self.dry_mass_unit = dry_mass_unit
         self.leaf_area = leaf_area
         self.height = height
         self.bkp = bkp
         self.tlp_conf = tlp_conf
+        self.psi_sign_convention = psi_sign_convention
+        self.validate_data = validate_data
+
+        # if psis, masses, or dry mass are not provided/None, raise an error
+        if self.psis is None or self.masses is None or self.dry_mass is None:
+            raise ValueError("psis, masses, and dry_mass must all be provided.")
+        
+        # drop data points that don't have both psi and mass values
+        valid_idx = ~np.isnan(self.psis) & ~np.isnan(self.masses)
+        if len(self.psis[valid_idx]) < len(self.psis):
+            logging.warning("Dropping data points with missing Ψ or mass values...")
+            self.psis = self.psis[valid_idx]
+            self.masses = self.masses[valid_idx]
+        if len(self.psis) < 4:
+            raise ValueError("Need at least four non-NaN data points to create a PVCurve. Sorry!")
+
+        # if psi units are not MPa, convert to MPa
+        if self.psi_unit == None:
+            self.psi_unit = 'MPa'
+            logging.info("No psi unit provided. Assuming MPa...")
+        if self.psi_unit.lower() == 'bar':
+            self.psis = self.psis / 10.0
+            logging.info("Converted Ψ values from bar to MPa for internal processing. New values: " + str(self.psis[0:5]) + "...")
+        elif self.psi_unit.lower() == 'kpa':
+            self.psis = self.psis / 1000.0
+            logging.info("Converted Ψ values from kPa to MPa for internal processing. New values: " + str(self.psis[0:5]) + "...")
+        elif self.psi_unit.lower() == 'mpa':
+            pass
+        else:
+            raise ValueError("Unsupported psi unit. Please use 'MPa', 'bar', or 'kPa'.")
+        
+        # if mass units are not g, convert to g
+        if self.mass_unit == None:
+            self.mass_unit = 'g'
+            logging.info("No mass unit provided. Assuming grams...")
+        if self.mass_unit.lower() == 'mg':
+            self.masses = self.masses / 1000.0
+            self.dry_mass = self.dry_mass / 1000.0
+            logging.info("Converted mass values from mg to g for internal processing. New values: " + str(self.masses[0:5]) + "...")
+        elif self.mass_unit.lower() == 'g':
+            pass
+        else:
+            raise ValueError("Unsupported mass unit. Please use 'g' or 'mg'.")
+        
+        # same for dry mass...
+        if self.dry_mass_unit == None:
+            self.dry_mass_unit = self.mass_unit
+            logging.info("No dry mass unit provided. Assuming " + self.mass_unit + " (same as mass unit)...")
+        if self.dry_mass_unit.lower() == 'mg':
+            self.dry_mass = self.dry_mass / 1000.0
+            logging.info("Converted dry mass value from mg to g for internal processing. New value: " + str(self.dry_mass) + "...")
+        elif self.dry_mass_unit.lower() == 'g':
+            pass
+        else:
+            raise ValueError("Unsupported dry mass unit. Please use 'g' or 'mg'.")
+
+        # handle psi sign convention
+        if self.psi_sign_convention.lower() == 'positive':
+            self.psis = -1 * self.psis
+        elif self.psi_sign_convention.lower() == 'negative':
+            # if all of the psis are positive, though, let's just fix it
+            if np.all(self.psis >= 0):
+                logging.warning("All Ψ values are positive. Assuming pressure chamber convention was used, changing to negative...")
+                self.psis = -1 * self.psis
+        else:
+            raise ValueError("Unsupported psi_sign_convention. Please use 'negative' or 'positive'.")
 
         # validate the data
-        self._validate_data()
+        if self.validate_data:
+            self._validate_data()
 
         # sort everything according to the mass in reverse order
-        sort_idx = np.argsort(masses)[::-1]
-        self.psis = psis[sort_idx]
-        self.masses = masses[sort_idx]
+        sort_idx = np.argsort(self.masses)[::-1]
+        self.psis = self.psis[sort_idx]
+        self.masses = self.masses[sort_idx]
         
         # if the sorting changed something, let the user know
-        if not np.array_equal(sort_idx, np.arange(len(masses))):
+        if not np.array_equal(sort_idx, np.arange(len(self.masses))):
             logging.warning("Data was sorted into decreasing mass order.")
 
         # basic calculations
-        self.inverse_psis = -1 / psis
-        self.water_mass = masses - dry_mass
+        # if there is a psi that's exactly zero, nudge it a bit
+        if np.any(self.psis == 0):
+            logging.warning("One or more Ψ values are exactly zero. Nudging these values slightly negative to avoid division by zero...")
+            self.psis[self.psis == 0] = -1e-6
+        self.inverse_psis = -1 / self.psis
+        self.water_mass = self.masses - self.dry_mass
 
         # get breakpoint if not provided
         if bkp == 0:
-            self.bkp = get_breakpoint(psis, masses, dry_mass)
+            logging.info("No breakpoint provided. Calculating breakpoint...")
+            self.bkp = get_breakpoint(self.psis, self.masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+                                      leaf_area = self.leaf_area, height = self.height, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data)
 
         # water mass at full turgor (Ψ = 0)
         slope, intercept = np.polyfit(self.water_mass[:self.bkp], self.psis[:self.bkp], 1)
@@ -126,8 +220,13 @@ class PVCurve:
     def _validate_data(self):
         if self.psis.shape != self.masses.shape:
             raise ValueError("Ψ and mass data are not the same shape. If there are missing measurements, please fill in with np.nan.")
-        if self.bkp < 0 or self.bkp > len(self.psis):
-            raise ValueError("Breakpoint is either negative or larger than the number of points in the dataset.")
+        if self.bkp != 0:
+            if self.bkp < 0 or self.bkp > len(self.psis):
+                raise ValueError("Breakpoint is either negative or larger than the number of points in the dataset.")
+            if self.bkp < 2 or self.bkp > len(self.psis) - 2:
+                raise ValueError("Breakpoint must leave at least 2 points on each side.")
+        if np.any(self.masses < self.dry_mass):
+            raise ValueError("One or more mass measurements are less than the dry mass. Please check your data.")
 
 
     # remove point from curve based on index
@@ -137,7 +236,9 @@ class PVCurve:
         """
         new_psis = np.delete(self.psis, idx)
         new_masses = np.delete(self.masses, idx)
-        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, 0) # breakpoint will be recalculated
+        # when creating a new curve, bkp is set back to 0 so it will recalculate
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+        leaf_area = self.leaf_area, height = self.height, bkp = 0, tlp_conf = self.tlp_conf, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data)
         return new_pvcurve
 
     # print function
@@ -175,7 +276,6 @@ class PVCurve:
             'Turgor pressure (MPa)': self.turgor_pressure
         }
 
-        # TODO #4 -- this calculations list is out of date
         calculations = {
             'Number of points used for \'before TLP\'': self.bkp,
             'Dry Mass (g)': self.dry_mass,
@@ -238,8 +338,8 @@ class PVCurve:
         """
 
         # check that the filename ends in .xlsx; if not throw exception
-        if not filename.endswith('.xlsx'):
-            raise ValueError("Filename must end in .xlsx")
+        if not filename.endswith('.xlsx') and not filename.endswith('.xls') and not filename.endswith('.xlsm'):
+            raise ValueError("Filename must end in .xlsx, .xls, or .xlsm")
 
         # create a dictionary of the data
         data = {
@@ -333,37 +433,56 @@ class PVCurve:
         """
         Set the breakpoint for the PVCurve object and recalculate everything
         """
-        new_PVcurve = PVCurve(self.psis, self.masses, self.dry_mass, self.leaf_area, self.height, bkp)
+        new_PVcurve = PVCurve(self.psis, self.masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+                              leaf_area = self.leaf_area, height = self.height, bkp = bkp, tlp_conf = self.tlp_conf, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data)
         return new_PVcurve
     
     
-    def remove_outliers(self, conf: float = 0.05, plot=False):
+    def remove_outliers(self, method: str = 'regression', **kwargs):
         """
-        Remove outliers from the PVCurve object based on confidence interval around linear regressions.
+        Remove outliers from the PVCurve object.
+        inputs:
+            plot: whether to plot the outlier removal process (default is False) 
+            method: method for outlier removal (default is 'regression')
+                'regression': remove points outside of a confidence interval around the piecewise regression lines
+                'local_mad': remove points based on local median absolute deviation
+        outputs:
+            new_pvcurve: PVCurve object with outliers removed
+        
         """  
         ## TODO: #1 add a plot option to show the outliers that were removed
 
-        # before TLP (regress water mass and psi)
-        x = self.masses[:self.bkp]
-        x = sm.add_constant(x)
-        y = self.psis[:self.bkp]
-        model = sm.OLS(y, x).fit()
-        y_hat = model.get_prediction(x).summary_frame(alpha=conf)
-        outliers1 = y[(y_hat['mean_ci_lower'] > y) | (y_hat['mean_ci_upper'] < y)]
-        outliers1_idx = [i for i, val in enumerate(y) if val in outliers1]
+        if method == 'regression':
+            # Remove outliers using a confidence interval around the piecewise regression lines.
+            assert "alpha" in kwargs, "Please provide an 'alpha' keyword argument for the confidence interval (e.g., alpha=0.05 for 95% confidence interval)."
+            alpha = kwargs.get('alpha', 0.05)
+            if alpha <= 0 or alpha >= 1:
+                raise ValueError("Confidence interval must be between 0 and 1 (e.g., conf=0.05 for 95% confidence interval).")
 
-        # after TLP (regress -1/psi and RWC)
-        x = self.inverse_psis[self.bkp:]
-        x = sm.add_constant(x)
-        y = self.rwc[self.bkp:]
-        model = sm.OLS(y, x).fit()
-        y_hat = model.get_prediction(x).summary_frame(alpha=conf)
-        outliers2 = y[(y_hat['mean_ci_lower'] > y) | (y_hat['mean_ci_upper'] < y)]
-        outliers2_idx = [i for i, val in enumerate(y) if val in outliers2]
+            # before TLP (regress water mass and psi)
+            x = self.masses[:self.bkp]
+            x = sm.add_constant(x)
+            y = self.psis[:self.bkp]
+            model = sm.OLS(y, x).fit()
+            y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
+            mask1 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
+            outliers1_idx = np.where(mask1)[0].tolist()
 
-        new_pvcurve = self.remove_point(outliers1_idx + outliers2_idx)
+            # after TLP (regress -1/psi and RWC)
+            x = self.inverse_psis[self.bkp:]
+            x = sm.add_constant(x)
+            y = self.rwc[self.bkp:]
+            model = sm.OLS(y, x).fit()
+            y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
+            mask2 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
+            outliers2_idx = np.where(mask2)[0].tolist()
+            new_pvcurve = self.remove_point(outliers1_idx + outliers2_idx)
 
-        return new_pvcurve
+            return new_pvcurve
+        
+        # elif method == 'local_mad':
+        #     assert "window" in kwargs, "Please provide a 'window' keyword argument for the local MAD calculation (e.g., window=3)."
+
 
     def add_point(self, psi: float, mass: float):
         """
@@ -371,7 +490,8 @@ class PVCurve:
         """
         new_psis = np.append(self.psis, psi)
         new_masses = np.append(self.masses, mass)
-        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, self.bkp)
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+                              leaf_area = self.leaf_area, height = self.height, bkp = self.bkp, tlp_conf = self.tlp_conf, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data)
         return new_pvcurve
     
     def add_points(self, psis: np.ndarray, masses: np.ndarray):
@@ -380,7 +500,8 @@ class PVCurve:
         """
         new_psis = np.append(self.psis, psis)
         new_masses = np.append(self.masses, masses)
-        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, self.leaf_area, self.height, self.bkp)
+        new_pvcurve = PVCurve(new_psis, new_masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+                              leaf_area = self.leaf_area, height = self.height, bkp = self.bkp, tlp_conf = self.tlp_conf, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data)
         return new_pvcurve
     
     def get_breakpoint(self, plot=False):
@@ -388,7 +509,8 @@ class PVCurve:
         Get the breakpoint for the PVCurve object.
         """
         if plot:
-            get_breakpoint(self.psis, self.masses, self.dry_mass, plot=True)
+            get_breakpoint(self.psis, self.masses, self.dry_mass, psi_unit = self.psi_unit, mass_unit = self.mass_unit, dry_mass_unit = self.dry_mass_unit,
+                              leaf_area = self.leaf_area, height = self.height, psi_sign_convention = self.psi_sign_convention, validate_data = self.validate_data, plot=True)
         return self.bkp
 
 
@@ -396,7 +518,9 @@ class PVCurve:
 
 
 
-def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
+def get_breakpoint(psis, masses, dry_mass, psi_unit='MPa', mass_unit='g', dry_mass_unit='g', 
+                   leaf_area=np.nan, height=0, psi_sign_convention='negative', validate_data=True,
+                   return_r2s=False, plot=False):
     """
     Function to find the breakpoint for a pressure-volume curve.
     Here we define the breakpoint based on the fit that results in the maximum R2 value.
@@ -406,7 +530,18 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
         dry_mass: mass of dry leaf (g)
     outputs:
         breakpoint: index of the breakpoint
-    """
+    """    
+
+    # drop nan values to avoid screwing with np.polyfit later
+    valid = np.isfinite(psis) & np.isfinite(masses)
+    psis = psis[valid]
+    masses = masses[valid]
+    
+    # if we don't have at least four points tell the user we can't calculate a breakpoint
+    if len(psis) < 4:
+        raise ValueError("Need at least four non-NaN data points to calculate a breakpoint.")
+
+
     # initialize variables
     possible_bkps = np.arange(2, len(psis)-1)  # need at least two points on either side of the breakpoint
     r2s = []
@@ -414,7 +549,17 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
 
     # loop through all possible breakpoints
     for i in possible_bkps:
-        PVCurve_temp = PVCurve(psis, masses, dry_mass, bkp=i)
+        PVCurve_temp = PVCurve(
+            psis, masses, dry_mass,
+            bkp=i,
+            psi_unit=psi_unit,
+            mass_unit=mass_unit,
+            dry_mass_unit=dry_mass_unit,
+            leaf_area=leaf_area,
+            height=height,
+            psi_sign_convention=psi_sign_convention,
+            validate_data=validate_data,
+        )
         r2s.append(PVCurve_temp.r2)
         tlps.append(PVCurve_temp.tlp)
     
@@ -452,45 +597,200 @@ def get_breakpoint(psis, masses, dry_mass, return_r2s=False, plot=False):
         return breakpoint, r2s
     return breakpoint
 
+def _read_df(
+        df: pd.DataFrame,
+        psi_column: str = None,
+        mass_column: str = None,
+        dry_mass_column: str = None,
+        dry_mass: float = None,
+        psi_units: str = None,
+        mass_units: str = None,
+        dry_mass_units: str = None
+    ) -> PVCurve:
+    """
+    Helper function to read a dataframe into a PVCurve object.
+    inputs:
+        df: pandas DataFrame containing the data
+        psi_column: name of the column containing Ψ values (if None, will try to infer)
+        mass_column: name of the column containing mass values (if None, will try to infer)
+        dry_mass_column: name of the column containing dry mass values (if None, will try to infer)
+        dry_mass: value of the dry mass (if None, will try to infer from column)
+        psi_units: units of the Ψ values (if None, will default to MPa or try to infer from column name)
+        mass_units: units of the mass values (if None, will default to g or try to infer from column name)
+        dry_mass_units: units of the dry mass value (if None, will default to g or try to infer from column name)
+    outputs:
+        pvcurve: PVCurve object with the data from the CSV file
+    """
+
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip()
+
+    # function for inferring column names with fuzzy matching
+    norm_cols = {c.strip().lower(): c for c in df.columns}
+    def _infer_column(candidates):
+        for cand in candidates:
+            key = cand.strip().lower()
+            if key in norm_cols:
+                return norm_cols[key]
+        return None
+
+    if psi_column is None:
+        reasonable_psi_names = [
+            "psi", "ψ", "Ψ", "water potential", "water potential (mpa)", "y (mpa)", "Ψ (mpa)", "ψ (mpa)",
+            "water potential (bar)", "y (bar)", "Ψ (bar)", "ψ (bar)",
+            "water potential (kpa)", "y (kpa)", "Ψ (kpa)", "ψ (kpa)"
+        ]
+        psi_column = _infer_column(reasonable_psi_names)
+        if psi_column is None:
+            psi_column = "Ψ (MPa)"
+        if psi_column in df.columns:
+            logging.info(f"No value given for psi_column. Using column '{psi_column}' for Ψ values...")
+        else:
+            raise ValueError("No value given for psi_column and no reasonable column name found for Ψ values.")
+    # raise an error of the psi_column is not in the data sheet
+    if psi_column not in df.columns:
+        raise ValueError(f"Column '{psi_column}' not found in dataframe columns.")
+
+    # if there are fewer than 2 non-nan values for psi, raise an error at this point
+    if df[psi_column].dropna().shape[0] < 2:
+        raise ValueError(f"Column '{psi_column}' has fewer than 2 non-nan values. Is this the correct column for Ψ values?")
+    
 
 
+    # if 'bar' or 'kpa' is in the column name, set the units appropriately
+    if psi_units is None:
+        if 'bar' in psi_column.lower():
+            logging.info(f"Detected 'bar' in psi_column name '{psi_column}'. Assuming units are in bar.")
+            psi_units = 'bar'
+        elif 'kpa' in psi_column.lower():
+            logging.info(f"Detected 'kpa' in psi_column name '{psi_column}'. Assuming units are in kPa.")
+            psi_units = 'kPa'
+        else: 
+            logging.info(f"Assuming Ψ units are in MPa.")
+            psi_units = 'MPa'
 
-def read_csv(filename: str):
+    # infer mass column based on df keys
+    if mass_column is None:
+        reasonable_mass_names = ["mass", "mass (g)", "weight", "weight (g)", "wet mass", "wet mass (g)", "mass (mg)", "weight (mg)", "wet mass (mg)"]
+        mass_column = _infer_column(reasonable_mass_names) or "Mass (g)"
+        if mass_column in df.columns:
+            logging.info(f"No value given for mass_column. Using column '{mass_column}' for mass values...")
+        else:
+            raise ValueError("No value given for mass_column and no reasonable column name found for mass values.")
+    # raise an error of the mass_column is not in the data sheet
+    if mass_column not in df.columns:
+        raise ValueError(f"Column '{mass_column}' not found in dataframe columns.")
+
+    # detecting units for mass
+    if mass_units is None:
+        if 'mg' in mass_column.lower():
+            logging.info(f"Detected 'mg' in mass_column name '{mass_column}'. Assuming units are in mg.")
+            mass_units = 'mg'
+        else:
+            logging.info(f"Assuming mass units are in grams.")
+            mass_units = 'g'
+
+    # if there are fewer than 2 non-nan values in mass data, raise an error at this point
+    if df[mass_column].dropna().shape[0] < 2:
+        raise ValueError(f"Column '{mass_column}' has fewer than 2 non-nan values. Is this the correct column for mass values?")
+
+    if dry_mass is None:
+        if dry_mass_column is None:
+            dm_col = _infer_column(["dry mass (g)", "dry mass", "dry weight (g)", "dry weight", "dry", "dry (g)", "dry mass (mg)", "dry weight (mg)", "dry (mg)"])
+            dry_mass_column = dm_col
+
+        if dry_mass_column is None or dry_mass_column not in df.columns:
+            raise ValueError(
+                "Dry mass not provided and no dry mass column found. "
+                "Pass dry_mass=... or specify dry_mass_column=..."
+            )
+
+        if dry_mass_column not in df.columns:
+            raise ValueError(f"Column '{dry_mass_column}' not found in dataframe columns.")
+        
+        dm_vals = df[dry_mass_column].dropna().values
+        if dm_vals.size == 0:
+            raise ValueError(f"Dry mass column '{dry_mass_column}' exists but contains no values.")
+
+        # Consistency check
+        unique = np.unique(dm_vals.astype(float))
+        if unique.size > 1:
+            logging.warning(
+                f"Multiple dry mass values found in '{dry_mass_column}' ({unique[:5]}...). "
+                "Using the first value."
+            )
+        dry_mass = float(dm_vals[0])
+        logging.info(f"Using dry mass value of {dry_mass} from '{dry_mass_column}' column.")
+
+    if dry_mass_units is None:
+        if dry_mass_column and 'mg' in dry_mass_column.lower():
+            logging.info(f"Detected 'mg' in dry_mass_column name '{dry_mass_column}'. Assuming units are in mg.")
+            dry_mass_units = 'mg'
+        else: 
+            logging.info(f"No unit for dry mass found. Assuming dry mass units are the same as mass units.")
+            dry_mass_units = mass_units
+    
+    # create the PVCurve object
+    pvcurve = PVCurve(df[psi_column].values, df[mass_column].values, dry_mass, psi_unit=psi_units, mass_unit=mass_units, dry_mass_unit=dry_mass_units)
+    return pvcurve
+
+
+def read_csv(
+        filename: str,
+        **kwargs
+    ) -> PVCurve:
     """
     Read a CSV file into a PVCurve object.
+    inputs:
+        filename: path to the CSV file
+    outputs:
+        pvcurve: PVCurve object with the data from the CSV file
     """
-    # check that the filename ends in .csv; if not throw exception
-    if not filename.endswith('.csv'):
-        raise ValueError("Filename must end in .csv")
 
     # read in the data
     df = pd.read_csv(filename)
-
-    # check that the columns are named correctly
-    if 'Ψ (MPa)' not in df.columns or 'Mass (g)' not in df.columns or 'Dry Mass (g)' not in df.columns:
-        raise ValueError("This function was designed to read in CSVs created by the save_csv method of the PVCurve object. The supplied file is not in the expected format.")
-    
-    # create the PVCurve object
-    pvcurve = PVCurve(df['Ψ (MPa)'].values, df['Mass (g)'].values, df['Dry Mass (g)'].values[0])
-
+    # convert all column names to stripped strings for easier matching
+    df.columns = df.columns.astype(str).str.strip()
+    pvcurve = _read_df(
+        df,
+        **kwargs
+    )
     return pvcurve
 
-def read_excel(filename: str):
+    
+
+def read_excel(
+        filename: str,
+        **kwargs
+    ) -> PVCurve:
     """
     Read an Excel file into a PVCurve object.
+    inputs:
+        filename: path to the Excel file
+        psi_column: name of the column containing Ψ values (if None, will try to infer)
+        mass_column: name of the column containing mass values (if None, will try to infer)
+        dry_mass_column: name of the column containing dry mass values (if None, will try to infer)
+        dry_mass: value of the dry mass (if None, will try to infer from column)
+        psi_units: units of the Ψ values (if None, will default to MPa or try to infer from column name)
+        mass_units: units of the mass values (if None, will default to g or try to infer from column name)
+        dry_mass_units: units of the dry mass value (if None, will default to g or try to infer from column name)
+    outputs:
+        pvcurve: PVCurve object with the data from the Excel file
     """
-    # check that the filename ends in .xlsx; if not throw exception
-    if not filename.endswith('.xlsx'):
-        raise ValueError("Filename must end in .xlsx")
-
     # read in the data
     df = pd.read_excel(filename)
-
-    # check that the columns are named correctly
-    if 'Ψ (MPa)' not in df.columns or 'Mass (g)' not in df.columns or 'Dry Mass (g)' not in df.columns:
-        raise ValueError("This function was designed to read in Excel files created by the save_excel method of the PVCurve object. The supplied file is not in the expected format.")
-    
-    # create the PVCurve object
-    pvcurve = PVCurve(df['Ψ (MPa)'].values, df['Mass (g)'].values, df['Dry Mass (g)'].values[0])
-
+    # convert all column names to stripped strings for easier matching
+    df.columns = df.columns.astype(str).str.strip()
+    pvcurve = _read_df(
+        df,
+        **kwargs
+    )
     return pvcurve
+
+def read(filename: str, **kwargs) -> PVCurve:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".csv":
+        return read_csv(filename, **kwargs)
+    if suffix in [".xlsx", ".xls", ".xlsm"]:
+        return read_excel(filename, **kwargs)
+    raise ValueError(f"Unsupported file type: {suffix}")
