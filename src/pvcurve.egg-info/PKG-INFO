@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: pvcurve
+Version: 0.1.0
+Summary: Tools for analyzing pressure–volume curves in plant physiology
+Author: Jean Allen
+License: MIT
+Project-URL: Homepage, https://github.com/jean-allen/pvcurve
+Project-URL: Issues, https://github.com/jean-allen/pvcurve/issues
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: statsmodels
+Requires-Dist: matplotlib
+Requires-Dist: openpyxl
+Dynamic: license-file
+
 # pvcurve
 
 A lightweight python package for analyzing pressure-volume curves. This package provides a simple and fast way to calculate common PV curve metrics (e.g., turgor loss point, capacitance, osmotic potential) with automated turgor loss detection, built-in plotting, and optional outlier detection. All of the math is based on the Williams P-V Curve analyzer (none of the actual science in here is my own; this is just a tool for working with data!). I put it together for [a project I've been working on](https://github.com/jean-allen/spectral_pv_curves) but I'm hopeful that it can be helpful to you too ☺

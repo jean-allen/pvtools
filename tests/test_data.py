@@ -1,5 +1,5 @@
 import numpy as np
-import pvtools.pv_curve as pvc
+import pvcurve as pvc
 import matplotlib.pyplot as plt
 
 # test data for PVCurve object from Williams P-V
