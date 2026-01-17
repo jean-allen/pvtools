@@ -7,7 +7,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 import logging
-logging.basicConfig(level=logging.INFO)
 
 
 # object class called a pv curve
@@ -117,7 +116,7 @@ class PVCurve:
         elif self.psi_sign_convention.lower() == 'negative':
             # if all of the psis are positive, though, let's just fix it
             if np.all(self.psis >= 0):
-                logging.warning("All Ψ values are positive. Assuming pressure chamber convention was used, changing to negative...")
+                logging.warning("All Ψ values are positive. Flipping sign to negative for all points...")
                 self.psis = -1 * self.psis
         else:
             raise ValueError("Unsupported psi_sign_convention. Please use 'negative' or 'positive'.")
@@ -180,7 +179,7 @@ class PVCurve:
         y = self.sol_pot[:self.bkp]
         model = sm.OLS(y, x).fit()
         y_hat = model.get_prediction([1,0]).summary_frame(alpha=self.tlp_conf)
-        self.tlp_conf_int = (y_hat['mean_ci_lower'], y_hat['mean_ci_upper'])
+        self.tlp_conf_int = (y_hat['mean_ci_lower'].values[0], y_hat['mean_ci_upper'].values[0])
         self.tlp = y_hat['mean'].values[0]
 
         # rwc at turgor loss point
@@ -269,6 +268,7 @@ class PVCurve:
         data = {
             'Ψ (MPa)': self.psis,
             'Mass (g)': self.masses,
+            'Dry Mass (g)': [self.dry_mass] + [np.nan]*(len(self.psis)-1),
             '-1/Ψ (MPa^-1)': self.inverse_psis,
             'Water mass (g)': self.water_mass,
             'RWC': self.rwc,
@@ -278,7 +278,6 @@ class PVCurve:
 
         calculations = {
             'Number of points used for \'before TLP\'': self.bkp,
-            'Dry Mass (g)': self.dry_mass,
             'Water at FT (g)': self.water_FT,
             'Saturated Water Content': self.swc,
             'Osmotic potential at FT (MPa)': self.os_pot_FT,
@@ -345,6 +344,7 @@ class PVCurve:
         data = {
             'Ψ (MPa)': self.psis,
             'Mass (g)': self.masses,
+            'Dry Mass (g)': [self.dry_mass] + [np.nan]*(len(self.psis)-1),
             '-1/Ψ (MPa^-1)': self.inverse_psis,
             'Water mass (g)': self.water_mass,
             'RWC': self.rwc,
@@ -354,7 +354,6 @@ class PVCurve:
 
         calculations = {
             'Number of points used for \'before TLP\'': self.bkp,
-            'Dry Mass (g)': self.dry_mass,
             'Water at FT (g)': self.water_FT,
             'Saturated Water Content': self.swc,
             'Osmotic potential at FT (MPa)': self.os_pot_FT,
@@ -440,49 +439,55 @@ class PVCurve:
     
     def remove_outliers(self, method: str = 'regression', **kwargs):
         """
-        Remove outliers from the PVCurve object.
+        Remove outliers from the PVCurve object. Mostly for catching transcription errors!
         inputs:
             plot: whether to plot the outlier removal process (default is False) 
             method: method for outlier removal (default is 'regression')
                 'regression': remove points outside of a confidence interval around the piecewise regression lines
                 'local_mad': remove points based on local median absolute deviation
         outputs:
-            new_pvcurve: PVCurve object with outliers removed
-        
+            new_pvcurve: PVCurve object with outliers removed according to the specified method        
         """  
         ## TODO: #1 add a plot option to show the outliers that were removed
 
         if method == 'regression':
             # Remove outliers using a confidence interval around the piecewise regression lines.
-            assert "alpha" in kwargs, "Please provide an 'alpha' keyword argument for the confidence interval (e.g., alpha=0.05 for 95% confidence interval)."
+            if 'alpha' not in kwargs:
+                logging.warning("No 'alpha' keyword argument provided for regression outlier removal. Using default alpha=0.05 for 95% confidence interval.")
             alpha = kwargs.get('alpha', 0.05)
-            if alpha <= 0 or alpha >= 1:
-                raise ValueError("Confidence interval must be between 0 and 1 (e.g., conf=0.05 for 95% confidence interval).")
+            
+            new_pvcurve = regression_removal(self, alpha=alpha)
 
-            # before TLP (regress water mass and psi)
-            x = self.masses[:self.bkp]
-            x = sm.add_constant(x)
-            y = self.psis[:self.bkp]
-            model = sm.OLS(y, x).fit()
-            y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
-            mask1 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
-            outliers1_idx = np.where(mask1)[0].tolist()
+        elif method == 'local_mad':
+            # Remove outliers using local median absolute deviation.
+            
+            if 'window' not in kwargs:
+                logging.warning("No 'window' keyword argument provided for local MAD outlier removal. Using default window=5 (i.e., 5 data points will be used to calculate local median absolute deviation).") 
+            window = kwargs.get('window', 5)
+            if window < 3 or window % 2 == 0:
+                raise ValueError("Window size must be a positive odd integer greater than or equal to three.")
+            if window > len(self.psis):
+                raise ValueError("Window size cannot be larger than the number of data points in the PVCurve.") 
 
-            # after TLP (regress -1/psi and RWC)
-            x = self.inverse_psis[self.bkp:]
-            x = sm.add_constant(x)
-            y = self.rwc[self.bkp:]
-            model = sm.OLS(y, x).fit()
-            y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
-            mask2 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
-            outliers2_idx = np.where(mask2)[0].tolist()
-            new_pvcurve = self.remove_point(outliers1_idx + outliers2_idx)
+            if 'cutoff' not in kwargs:
+                logging.warning("No 'cutoff' keyword argument provided for local MAD outlier removal. Using default cutoff=4 (i.e., points will be removed if they are more than 4 median absolute deviations from the local median).")
+            cutoff = kwargs.get('cutoff', 4)
+            if cutoff <= 0:
+                raise ValueError("Cutoff must be a positive number.")
+            if 'protect_edges' not in kwargs:
+                logging.warning("No 'protect_edges' keyword argument provided for local MAD outlier removal. Using default protect_edges=2 (i.e., first and last two points will not be considered for outlier removal).")
+            protect_edges = kwargs.get('protect_edges', 2)
+            if protect_edges < 0:
+                raise ValueError("protect_edges must be a non-negative integer.")
+            if protect_edges * 2 >= len(self.psis):
+                raise ValueError("protect_edges cannot be larger than or equal to half the number of data points in the PVCurve. Otherwise you're just not removing outliers at all :)")
 
-            return new_pvcurve
+            new_pvcurve = local_mad_removal(self, window=window, cutoff=cutoff)
+        else:
+            raise ValueError(f"Unsupported outlier removal method ({method}). Please use 'regression' or 'local_mad'.")
+
+        return new_pvcurve
         
-        # elif method == 'local_mad':
-        #     assert "window" in kwargs, "Please provide a 'window' keyword argument for the local MAD calculation (e.g., window=3)."
-
 
     def add_point(self, psi: float, mass: float):
         """
@@ -516,6 +521,103 @@ class PVCurve:
 
 
 
+
+### outlier removal support functions
+
+# linear regression confidence interval
+def regression_removal(pvcurve: PVCurve, alpha: float = 0.05):
+    """
+    Remove outliers from a PVCurve object using regression-based method.
+    inputs:
+        pvcurve: PVCurve object
+        alpha: significance level for confidence interval (default is 0.05 for 95% confidence interval)
+    outputs:
+        new_pvcurve: PVCurve object with outliers removed
+    """
+    if alpha <= 0 or alpha >= 1:
+        raise ValueError("Confidence interval must be between 0 and 1 (e.g., conf=0.05 for 95% confidence interval).")
+
+    # before TLP (regress water mass and psi)
+    x = pvcurve.masses[:pvcurve.bkp]
+    x = sm.add_constant(x)
+    y = pvcurve.psis[:pvcurve.bkp]
+    model = sm.OLS(y, x).fit()
+    y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
+    mask1 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
+    outliers1_idx = np.where(mask1)[0].tolist()
+
+    # after TLP (regress -1/psi and RWC)
+    x = pvcurve.inverse_psis[pvcurve.bkp:]
+    x = sm.add_constant(x)
+    y = pvcurve.rwc[pvcurve.bkp:]
+    model = sm.OLS(y, x).fit()
+    y_hat = model.get_prediction(x).summary_frame(alpha=alpha)
+    mask2 = (y_hat['obs_ci_lower'].to_numpy() > y) | (y_hat['obs_ci_upper'].to_numpy() < y)
+    outliers2_idx = (pvcurve.bkp + np.where(mask2)[0]).tolist()
+    logging.info('Detected {} outlier(s) using regression method.'.format(len(outliers1_idx) + len(outliers2_idx)))
+    logging.info("Recalculating breakpoint after outlier removal...")
+    new_pvcurve = pvcurve.remove_point(outliers1_idx + outliers2_idx)
+
+    return new_pvcurve
+        
+# local median absolute deviation
+def local_mad_removal(pvcurve: PVCurve, window: int = 5, cutoff: float = 4, protect_edges: int = 2):
+    """
+    Remove outliers from a PVCurve object using local median absolute deviation method.
+    inputs:
+        pvcurve: PVCurve object
+        window: size of the moving window (default is 5)
+        cutoff: number of median absolute deviations to use as cutoff (default is 4)
+        protect_edges: number of points at each edge to omit from outlier detection (default is 2)
+    outputs:
+        new_pvcurve: PVCurve object with outliers removed
+    """
+    # TODO: add some way to address outliers on the edges (e.g., first and last few points). right now they are just skipped.
+
+    n = len(pvcurve)
+    half_window = window // 2
+    outlier_indices = []
+    for i in range(n):
+        if i < protect_edges or i >= n - protect_edges:
+            continue  # skip edge points. again, it'd be nice to have a way to deal with these
+
+        # define the window
+        start = max(0, i - half_window)
+        end = min(n, i + half_window + 1)
+
+        # masses first...
+        window_data = pvcurve.masses[start:end]
+        # calculate the median and MAD
+        median = np.median(window_data)
+        mad = np.median(np.abs(window_data - median))
+        if mad == 0:
+            continue  # avoid division by zero
+        # calculate the modified z-score
+        modified_z_score = 0.6745 * (pvcurve.masses[i] - median) / mad
+        # check if the point is an outlier
+        if np.abs(modified_z_score) > cutoff:
+            outlier_indices.append(i)
+            continue
+
+        # now psis
+        window_data = pvcurve.psis[start:end]
+        median = np.median(window_data)
+        mad = np.median(np.abs(window_data - median))
+        if mad == 0:
+            continue  # avoid division by zero
+        modified_z_score = 0.6745 * (pvcurve.psis[i] - median) / mad
+        if np.abs(modified_z_score) > cutoff:
+            outlier_indices.append(i)
+
+    logging.info('Detected {} outlier(s) using local MAD method.'.format(len(outlier_indices)))
+    psis = np.delete(pvcurve.psis, outlier_indices)
+    masses = np.delete(pvcurve.masses, outlier_indices)
+    # bkp is set back to 0 so it will recalculate
+    logging.info("Recalculating breakpoint after outlier removal...")
+    new_pvcurve = PVCurve(psis, masses, pvcurve.dry_mass, psi_unit = pvcurve.psi_unit, mass_unit = pvcurve.mass_unit, dry_mass_unit = pvcurve.dry_mass_unit,
+                        leaf_area = pvcurve.leaf_area, height = pvcurve.height, bkp = 0, tlp_conf = pvcurve.tlp_conf, psi_sign_convention = pvcurve.psi_sign_convention, validate_data = pvcurve.validate_data)
+
+    return new_pvcurve
 
 
 def get_breakpoint(psis, masses, dry_mass, psi_unit='MPa', mass_unit='g', dry_mass_unit='g', 
@@ -605,7 +707,8 @@ def _read_df(
         dry_mass: float = None,
         psi_units: str = None,
         mass_units: str = None,
-        dry_mass_units: str = None
+        dry_mass_units: str = None,
+        bkp: int = 0,
     ) -> PVCurve:
     """
     Helper function to read a dataframe into a PVCurve object.
@@ -618,6 +721,7 @@ def _read_df(
         psi_units: units of the Ψ values (if None, will default to MPa or try to infer from column name)
         mass_units: units of the mass values (if None, will default to g or try to infer from column name)
         dry_mass_units: units of the dry mass value (if None, will default to g or try to infer from column name)
+        bkp: breakpoint index (if 0, will try to infer)
     outputs:
         pvcurve: PVCurve object with the data from the CSV file
     """
@@ -713,10 +817,9 @@ def _read_df(
             raise ValueError(f"Dry mass column '{dry_mass_column}' exists but contains no values.")
 
         # Consistency check
-        unique = np.unique(dm_vals.astype(float))
-        if unique.size > 1:
+        if dm_vals.size > 1:
             logging.warning(
-                f"Multiple dry mass values found in '{dry_mass_column}' ({unique[:5]}...). "
+                f"Multiple dry mass values found under '{dry_mass_column}' ({dm_vals[:5]}...). "
                 "Using the first value."
             )
         dry_mass = float(dm_vals[0])
@@ -731,7 +834,7 @@ def _read_df(
             dry_mass_units = mass_units
     
     # create the PVCurve object
-    pvcurve = PVCurve(df[psi_column].values, df[mass_column].values, dry_mass, psi_unit=psi_units, mass_unit=mass_units, dry_mass_unit=dry_mass_units)
+    pvcurve = PVCurve(df[psi_column].values, df[mass_column].values, dry_mass, bkp=bkp, psi_unit=psi_units, mass_unit=mass_units, dry_mass_unit=dry_mass_units)
     return pvcurve
 
 
